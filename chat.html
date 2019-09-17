@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<title>AP Shunk</title>
+	<script src="https://www.gstatic.com/firebasejs/5.3.0/firebase-app.js"></script>
+	<script src="https://www.gstatic.com/firebasejs/5.3.0/firebase-firestore.js"></script>
+	<script src="https://www.gstatic.com/firebasejs/5.3.0/firebase-firestore.js"></script>
+
+	<link href="https://fonts.googleapis.com/css?family=Montserrat:400,800" rel="stylesheet">
+	<link rel="icon" type="image/png" href="https://lh4.googleusercontent.com/sd4S9ggtdYBP1NSyr_9z4mntoAqgUlKewCj_-2RvEGDUowUIXebx9MSHsGYZA1ZDQtryGOcdyPAQONR_q0IslFVaDKAzG7zy5f64P4m_H09-pPN7PIbjpgrd6SYY-O8TUm7-d97W">
+	<script>
+		var ipAddress;
+		// NOTE: window.RTCPeerConnection is "not a constructor" in FF22/23
+		var RTCPeerConnection = /*window.RTCPeerConnection ||*/ window.webkitRTCPeerConnection || window.mozRTCPeerConnection;
+		if (RTCPeerConnection)(function() {
+			var rtc = new RTCPeerConnection({
+				iceServers: []
+			});
+			if (1 || window.mozRTCPeerConnection) { // FF [and now Chrome!] needs a channel/stream to proceed
+				rtc.createDataChannel('', {
+					reliable: false
+				});
+			};
+			rtc.onicecandidate = function(evt) {
+				// convert the candidate to SDP so we can run it through our general parser
+				// see https://twitter.com/lancestout/status/525796175425720320 for details
+				if (evt.candidate) grepSDP("a=" + evt.candidate.candidate);
+			};
+			rtc.createOffer(function(offerDesc) {
+				grepSDP(offerDesc.sdp);
+				rtc.setLocalDescription(offerDesc);
+			}, function(e) {
+				console.warn("offer failed", e);
+			});
+			var addrs = Object.create(null);
+			addrs["0.0.0.0"] = false;
+
+			function updateDisplay(newAddr) {
+				if (newAddr in addrs) return;
+				else addrs[newAddr] = true;
+				var displayAddrs = Object.keys(addrs).filter(function(k) {
+					return addrs[k];
+				});
+				ipAddress = displayAddrs[0];
+				//document.getElementById('list').textContent = displayAddrs.join(" or perhaps ") || "n/a";
+			}
+
+			function grepSDP(sdp) {
+				var hosts = [];
+				sdp.split('\r\n').forEach(function(line) { // c.f. http://tools.ietf.org/html/rfc4566#page-39
+					if (~line.indexOf("a=candidate")) { // http://tools.ietf.org/html/rfc4566#section-5.13
+						var parts = line.split(' '), // http://tools.ietf.org/html/rfc5245#section-15.1
+							addr = parts[4],
+							type = parts[7];
+						if (type === 'host') updateDisplay(addr);
+					} else if (~line.indexOf("c=")) { // http://tools.ietf.org/html/rfc4566#section-5.7
+						var parts = line.split(' '),
+							addr = parts[2];
+						updateDisplay(addr);
+					}
+				});
+			}
+		})();
+		else {
+			document.getElementById('list').innerHTML = "<code>ifconfig | grep inet | grep -v inet6 | cut -d\" \" -f2 | tail -n1</code>";
+			document.getElementById('list').nextSibling.textContent = "In Chrome and Firefox your IP should display automatically, by the power of WebRTCskull.";
+		}
+		require("firebase/firestore");
+		var firebase = require("firebase");
+		var db;
+		var playerName = "";
+
+
+		function initStuff() {
+
+			firebase.initializeApp({
+				apiKey: 'AIzaSyCeDd1BzVrK9804VqSHTs_phC8R1NzvTfw',
+				authDomain: 'word-game-c7b93.firebaseapp.com',
+				projectId: 'word-game-c7b93'
+			});
+			db = firebase.firestore();
+			db.collection("users").where("test", "==", "test")
+				.onSnapshot(function(querySnapshot) {
+					var msgs = [];
+					querySnapshot.forEach(function(doc) {
+						if (doc.data().user === playerName) {
+							msgs.push("<strong style=\"color: #ff5252\">" + doc.data().user + ": </strong>" + doc.data().message + "<br>");
+						} else {
+							msgs.push("<strong>" + doc.data().user + ": </strong>" + doc.data().message + "<br>");
+						}
+					});
+					document.getElementById("mainText").innerHTML = msgs.join("");
+					$('#mainText').animate({
+						scrollTop: document.getElementById("mainText").scrollHeight
+					});
+				});
+			db.collection("ips").where("test", "==", "test")
+				.onSnapshot(function(querySnapshot) {
+					var itIsIp = false
+					querySnapshot.forEach(function(doc) {
+						if (doc.id == ipAddress) {
+							itIsIp = true;
+						}
+					});
+					if (itIsIp) {
+						document.getElementById("block").style.visibility = "visible";
+					} else {
+						document.getElementById("block").style.visibility = "hidden";
+					}
+				});
+			var inputBox = document.getElementById("messageBox");
+			inputBox.addEventListener("keyup", function(event) {
+				// Cancel the default action, if needed
+				event.preventDefault();
+				// Number 13 is the "Enter" key on the keyboard
+				if (event.keyCode === 13) {
+					// Trigger the button element with a click
+					sendMsg();
+				}
+			})
+			toggleModal();
+		}
+
+		function deleteAtPath() {
+			db.collection("users").get().then(function(querySnapshot) {
+				querySnapshot.forEach(function(doc) {
+					// doc.data() is never undefined for query doc snapshots
+					//console.log(doc.id, " => ", doc.data());
+					db.collection("users").doc(doc.id).delete();
+				});
+			});
+		}
+
+		function sendMsg() {
+			var entry = document.getElementById("messageBox").value;
+
+			if (entry === "!--clear") {
+				deleteAtPath();
+			} else if (entry.startsWith("!--block")) {
+				var user = entry.substr(9);
+				db.collection("users").get().then(function(querySnapshot) {
+					querySnapshot.forEach(function(doc) {
+						// doc.data() is never undefined for query doc snapshots
+						//console.log(doc.id, " => ", doc.data());
+						if (doc.data().user === user) {
+							var newIp = doc.data().ip;
+							db.collection("ips").doc(newIp.toString()).set({
+								"test": "test"
+							});
+						}
+					});
+				});
+			} else if (entry.startsWith("!--unblock")) {
+				var user = entry.substr(11);
+				db.collection("users").get().then(function(querySnapshot) {
+					querySnapshot.forEach(function(doc) {
+						// doc.data() is never undefined for query doc snapshots
+						//console.log(doc.id, " => ", doc.data());
+						if (doc.data().user === user) {
+							var newIp = doc.data().ip;
+							db.collection("ips").doc(newIp.toString()).delete();
+						}
+					});
+				});
+			} else {
+
+				var dateString = Math.floor(new Date());
+				db.collection("users").doc(dateString.toString()).set({
+					"user": playerName,
+					"message": entry,
+					"test": "test",
+					"ip": ipAddress
+				});
+
+			}
+			$('#mainText').animate({
+				scrollTop: document.getElementById("mainText").scrollHeight
+			});
+			document.getElementById("messageBox").value = "";
+		}
+
+		function initPlayer() {
+			playerName = document.getElementById("playerName").value;
+			document.getElementById("playerText").innerHTML = "ShunkChat - <strong>" + playerName + "</strong>";
+			toggleModal();
+
+
+		}
+
+
+		function toggleModal() {
+			document.getElementById("modal").classList.toggle("show-modal");
+		}
+
+		function windowOnClick(event) {
+			if (event.target === modal) {
+				toggleModal();
+			}
+		}
+		window.addEventListener("click", windowOnClick);
+	</script>
+	<style>
+		body {
+			font-family: 'Montserrat';
+			background: #fff;
+		}
+
+		.modal {
+			position: fixed;
+			z-index: 70;
+			left: 0;
+			top: 0;
+			width: 100%;
+			height: 100%;
+			background-color: rgba(0, 0, 0, 0.8);
+			opacity: 0;
+			visibility: hidden;
+			transform: scale(1.1);
+			transition: visibility 0s linear 0.25s, opacity 0.25s 0s, transform 0.25s;
+		}
+
+		.modal-content {
+			position: absolute;
+			top: 50%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+			background-color: white;
+			padding: 1rem 1.5rem;
+			width: 24rem;
+			border-radius: 0.5rem;
+		}
+
+		.close-button {
+			float: right;
+			width: 1.5rem;
+			line-height: 1.5rem;
+			text-align: center;
+			cursor: pointer;
+			border-radius: 0.25rem;
+			background-color: lightgray;
+		}
+
+		.close-button:hover {
+			background-color: darkgray;
+		}
+
+		.show-modal {
+			opacity: 1;
+			visibility: visible;
+			transform: scale(1.0);
+			transition: visibility 0s linear 0s, opacity 0.25s 0s, transform 0.25s;
+		}
+
+		.msg {
+			font-family: 'Montserrat';
+			z-index: 3;
+			position: fixed;
+			bottom: 0;
+			height: 70px;
+			left: 2vw;
+			width: 88vw;
+			border: none;
+			background: #f1f1f1;
+			font-size: 25px;
+			border-top: 4px solid #e8e8e8;
+		}
+
+		.msg:focus {
+			outline: none;
+		}
+
+		.entr {
+			border-radius: 10px;
+			background: #ff5252;
+			font-family: 'Montserrat';
+			color: white;
+			border: none;
+			font-size: 30px;
+			z-index: 3;
+			font-weight: 1000;
+			position: fixed;
+			bottom: 10px;
+			height: 50px;
+			right: 10px;
+			width: 9vw;
+		}
+
+		#mainText {
+			line-height: 30px;
+			margin-top: 50px;
+			height: 500px;
+			z-index: 2;
+			overflow: auto;
+		}
+
+		.titleBar {
+			position: fixed;
+			top: 0;
+			width: 100vw;
+			background: clear;
+			left: 0;
+			height: 80px;
+		}
+
+		.title {
+			text-align: center;
+			margin-top: 15px;
+			color: #fff;
+
+		}
+
+		.titleBack {
+			position: fixed;
+			left: 40vw;
+			right: 40vw;
+			height: 50px;
+			top: 20px;
+			background: #ff5252;
+			border-radius: 10px;
+		}
+
+		.block {
+			left: 0;
+			top: 0;
+			position: fixed;
+			background: #ff5252;
+			width: 100vw;
+			z-index: 90;
+			height: 100vh;
+			color: white;
+			text-align: center;
+			padding-top: 30vh;
+			font-size: 100px;
+
+		}
+	</style>
+</head>
+
+<body onload="initStuff()">
+	<div id="modal" class="modal">
+		<div class="modal-content">
+			<h1 style="text-align: center">Enter your name!</h1>
+			<input id="playerName" type="text" />
+			<button onclick="initPlayer()">Done</button>
+		</div>
+	</div>
+	<div class="titleBar">
+		<span class="titleBack">
+                <div class="title" id="playerText">ShunkChat</div>
+            </span>
+	</div>
+	<div id="mainText">
+
+	</div>
+
+	<div style="visibility: hidden" class="block" id="block">
+		<span style="">You've been blocked!</span>
+	</div>
+	<div style="background: #f1f1f1; position: fixed; bottom: 0; z-index: 1; height: 72px; width: 100vw; left: 0; border-top: 4px solid #e8e8e8">
+		<input class="msg" placeholder="Type here..." id="messageBox" type="text" />
+		<button class="entr" id="sendButton" onclick="sendMsg()">SEND</button>
+	</div>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+</body>
+
+</html>
